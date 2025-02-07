@@ -1,5 +1,6 @@
 import { atom } from '../../vanilla.ts'
 import type { WritableAtom } from '../../vanilla.ts'
+import { atomSymbol } from "../atom.ts"
 import { RESET } from './constants.ts'
 
 const isPromiseLike = (x: unknown): x is PromiseLike<unknown> =>
@@ -119,14 +120,108 @@ export function createJSONStorage<Value>(
 ): AsyncStorage<Value> | SyncStorage<Value> {
   let lastStr: string | undefined
   let lastValue: Value
+  
+  const id = Symbol();
+  const atomRegex = /^\\*atom$/;
+  
+  const escapeArray = (value: any[]) => {
+	const [first, ...rest] = value;
+  
+	if (first.test(atomRegex)) {
+	  return [`\\${first}`, ...rest];
+	}
+  
+	return value;
+  };
+  
+  const unescapeArray = (value: any[]) => {
+	const [first, ...rest] = value;
+  
+	if (first.test(atomRegex)) {
+	  return [first.slice(1), ...rest];
+	}
+  
+	return value;
+  };
+  
+  const serializeAtom = (value: Atom) => {
+	if (value.init === undefined) {
+	  throw new Error("Cannot serialize computed atom");
+	}
+  
+	if (value.storageId !== undefined) {
+	  if (value.storageId !== id) {
+		throw new Error("Cannot serialize atom with different storage");
+	  }
+  
+	  return ["atom", value.initialValue, value.storageKey];
+	}
+  
+	return ["atom", get(value)];
+  };
+  
+  const deserializeAtom = ([_, serializedValue, storageKey]: string[]) => {
+	const value = reviver("", serializedValue);
+  
+	if (storageKey !== undefined) {
+	  return atomWithStorage(storageKey, value, storage);
+	}
+  
+	return atom(value);
+  };
+  
+  const atomReplacer = (key: string, value: any) => {
+	if (value[atomSymbol]) {
+	  return serializeAtom(value);
+	}
+  
+	if (Array.isArray(value)) {
+	  return escapeArray(value);
+	}
+  
+	return value;
+  };
+  
+  const atomReviver = (key: string, value: any): any => {
+	if (!Array.isArray(value)) {
+	  return value;
+	}
+  
+	if (value[0] === "atom") {
+	  return deserializeAtom(value);
+	}
+  
+	return unescapeArray(value);
+  };
+  
+  const replacer = (key: string, value: any) => {
+	const newValue = atomReplacer(key, value);
+	
+	if(options?.replacer){
+		return options.replacer(key, newValue);
+	}
+	
+	return newValue
+  }
+  
+  const reviver = (key: string, value: any) => {
+	const newValue = atomReviver(key, value);
+	
+	if(options?.reviver){
+		return options.reviver(key, newValue);
+	}
+	
+	return newValue
+  }
 
   const storage: AsyncStorage<Value> | SyncStorage<Value> = {
+	id,
     getItem: (key, initialValue) => {
       const parse = (str: string | null) => {
         str = str || ''
         if (lastStr !== str) {
           try {
-            lastValue = JSON.parse(str, options?.reviver)
+            lastValue = JSON.parse(str, reviver)
           } catch {
             return initialValue
           }
@@ -143,7 +238,7 @@ export function createJSONStorage<Value>(
     setItem: (key, newValue) =>
       getStringStorage()?.setItem(
         key,
-        JSON.stringify(newValue, options?.replacer),
+        JSON.stringify(newValue, replacer),
       ),
     removeItem: (key) => getStringStorage()?.removeItem(key),
   }
@@ -268,6 +363,10 @@ export function atomWithStorage<Value>(
       return storage.setItem(key, nextValue)
     },
   )
+  
+  anAtom.storageKey = key;
+  anAtom.initialValue = initialValue;
+  anAtom.storageId = storage.id;
 
   return anAtom as never
 }

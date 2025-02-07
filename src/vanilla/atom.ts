@@ -73,6 +73,8 @@ export type PrimitiveAtom<Value> = WritableAtom<
 
 let keyCount = 0 // global key count for all atoms
 
+export const atomSymbol: symbol = Symbol()
+
 // writable derived atom
 export function atom<Value, Args extends unknown[], Result>(
   read: Read<Value, SetAtom<Args, Result>>,
@@ -103,6 +105,7 @@ export function atom<Value, Args extends unknown[], Result>(
 ) {
   const key = `atom${++keyCount}`
   const config = {
+	[atomSymbol]: true,
     toString() {
       return import.meta.env?.MODE !== 'production' && this.debugLabel
         ? key + ':' + this.debugLabel
